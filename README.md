@@ -1,93 +1,95 @@
-# commit-msg
+# commit-msg — AI-Powered Git Commit Messages
 
-AI-powered commit message generator for the terminal, built on [Claude Code](https://claude.ai/code).
+Generate [Conventional Commits](https://www.conventionalcommits.org/) messages from your staged diff using the Claude CLI. Two ways to use it: a standalone shell command, or a Claude Code slash command.
 
-Run `commit-msg` after `git add` and get a ready-to-use [Conventional Commit](https://www.conventionalcommits.org/) message — analyzed from your actual staged diff. Accept it, edit it, regenerate it, or abort.
+## Requirements
 
+- `git`
+- [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI (`claude` in PATH):
+  ```sh
+  npm install -g @anthropic-ai/claude-code
+  ```
+
+---
+
+## Option 1 — Shell command (`commit-msg`)
+
+### Install
+
+```sh
+sh install-commit-msg.sh
 ```
+
+This installs `~/.local/bin/commit-msg` (pure POSIX sh, works in bash/zsh/dash/ash). If `~/.local/bin` isn't in your PATH, the installer will tell you what to add.
+
+### Usage
+
+```sh
 git add .
 commit-msg
 ```
 
-```
-Analyzing staged diff with Claude Code...
+Output:
 
-------------------------------------------------------------------------
+```
 Suggested commit message:
-
-feat(auth): add NextAuth v5 with DrizzleAdapter and ABAC permission guards
-
-Integrates credentials, Google, Apple, and Microsoft OAuth providers.
-Adds DB-driven page:* and feature:* permission checks with Drizzle ORM schema.
-------------------------------------------------------------------------
-
-What do you want to do?
-  [Y] Accept and commit
-  [e] Edit before committing
-  [r] Regenerate (ask Claude again)
-  [n] Abort
-
-Choice [Y/e/r/n]:
+-------------------------------------------
+feat(pipeline): add PM2 restart step to deploy stage
+-------------------------------------------
+[Y]es / [e]dit / [r]egen / [n]o ?
 ```
 
-## Requirements
+- **Y** (or Enter) — commit with the suggested message
+- **e** — open the message in your editor (`$GIT_EDITOR` → `$VISUAL` → `$EDITOR` → `vi`), `#` lines are stripped, then commit
+- **r** — regenerate a new suggestion
+- **n** — abort; staged changes are left intact
 
-- [Claude Code](https://claude.ai/code) installed and logged in
-- `git`
-- macOS or Linux
+### Flags
 
-## Installation
-
-```bash
-bash install-commit-msg.sh
-```
-
-This installs the `commit-msg` command to `~/.local/bin/`.
-
-If that directory is not in your PATH yet, add this to your `~/.zshrc` or `~/.bashrc` and restart your terminal:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-## Usage
-
-```bash
-git add <files>
-commit-msg              # analyze → suggest → confirm
-commit-msg --dry-run    # print suggestion only, do not commit
-commit-msg --help       # show help
-```
-
-## How it works
-
-1. Reads your staged diff with `git diff --staged`
-2. Sends the diff (up to 800 lines) along with repo name, branch, and changed file list to Claude
-3. Claude generates a Conventional Commit message following these rules:
-   - `<type>(<scope>): <subject>` format, subject max 72 chars
-   - Optional body for non-trivial changes
-   - Scope inferred from the changed files
-4. You confirm, edit, regenerate, or abort — nothing is committed without your approval
-
-Uses **Claude Haiku** (fast and cheap) since commit message generation doesn't need a frontier model.
-
-## Conventional Commit types
-
-| Type | When to use |
+| Flag | Description |
 |------|-------------|
-| `feat` | New feature |
-| `fix` | Bug fix |
-| `docs` | Documentation only |
-| `style` | Formatting, no logic change |
-| `refactor` | Refactor without feature/fix |
-| `perf` | Performance improvement |
-| `test` | Adding or fixing tests |
-| `build` | Build system or dependencies |
-| `ci` | CI/CD configuration |
-| `chore` | Maintenance tasks |
-| `revert` | Revert a previous commit |
+| `-d`, `--dry-run` | Print the suggested message without committing |
+| `-h`, `--help` | Show help |
 
-## License
+### How it works
 
-MIT
-# claude-commit-msg
+The script collects repo name, branch, staged file list, diff stat, and the first 200 lines of `git diff --staged`, then asks `claude -p --model claude-haiku-4-5` for a Conventional Commit message. Haiku keeps it fast and cheap.
+
+---
+
+## Option 2 — Claude Code slash command (`/commit`)
+
+### Install
+
+Copy the command file into your project (or `~/.claude/commands/` for global use):
+
+```sh
+mkdir -p .claude/commands
+cp commit.md .claude/commands/commit.md
+```
+
+### Usage
+
+Inside a Claude Code session:
+
+```
+git add .   # in your terminal, or ask Claude to review what to stage
+/commit
+```
+
+Claude reads the staged diff, proposes a Conventional Commit message, and asks **[Y]es / [e]dit / [n]o** before committing. It will never commit, stage, amend, or push without your confirmation.
+
+---
+
+## Commit message rules (both paths)
+
+- Format: `<type>(<scope>): <subject>`
+- Types: `feat` `fix` `docs` `style` `refactor` `perf` `test` `chore` `ci` `build` `revert`
+- Subject ≤ 72 chars, imperative mood
+- Short body only when the subject alone isn't enough
+
+## Troubleshooting
+
+- **"claude CLI not found"** — install Claude Code and make sure `claude` is in PATH.
+- **"no staged changes"** — run `git add` first; both tools refuse to commit an empty index.
+- **Garbage in the message** — the script strips ``` fences automatically; use **r** to regenerate if the model misbehaves.
