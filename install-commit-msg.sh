@@ -109,7 +109,8 @@ Output ONLY the raw commit message -- no markdown fences, no commentary."
 
 # -p = non-interactive mode, uses your existing claude login session
 # --allowedTools Read = let Claude read the temp diff file
-SUGGESTED_MSG=$(claude -p "$PROMPT" --model claude-haiku-4-5 2>&1)
+RAW_MSG=$(claude -p "$PROMPT" --model claude-haiku-4-5 2>&1)
+SUGGESTED_MSG=$(echo "$RAW_MSG" | sed "/^```/d")
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -ne 0 ]]; then
