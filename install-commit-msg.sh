@@ -1,228 +1,170 @@
-#!/usr/bin/env bash
-# =============================================================================
-# install-commit-msg.sh
-# Installs the `commit-msg` command globally on your machine.
-# It analyzes your staged git diff with Claude Code and proposes a commit.
-#
-# Usage: bash install-commit-msg.sh
-# =============================================================================
+#!/usr/bin/env sh
+# install-commit-msg.sh — installs the AI-powered commit message generator
+# Pure POSIX sh. No bashisms.
 
-set -e
+set -eu
 
-INSTALL_DIR="$HOME/.local/bin"
-SCRIPT_NAME="commit-msg"
-SCRIPT_PATH="$INSTALL_DIR/$SCRIPT_NAME"
-
-# Sanity checks
-echo "Checking dependencies..."
-
-if ! command -v claude &>/dev/null; then
-  echo "ERROR: Claude Code is not installed or not in PATH."
-  echo "  Install it with: npm install -g @anthropic-ai/claude-code"
-  exit 1
+# --- Check dependencies -----------------------------------------------------
+if ! command -v claude >/dev/null 2>&1; then
+    echo "Error: 'claude' CLI not found. Install Claude Code first:" >&2
+    echo "  npm install -g @anthropic-ai/claude-code" >&2
+    exit 1
 fi
 
-if ! command -v git &>/dev/null; then
-  echo "ERROR: git is not installed."
-  exit 1
+if ! command -v git >/dev/null 2>&1; then
+    echo "Error: 'git' not found in PATH." >&2
+    exit 1
 fi
 
-echo "All dependencies found."
-mkdir -p "$INSTALL_DIR"
+# --- Install location -------------------------------------------------------
+BIN_DIR="$HOME/.local/bin"
+TARGET="$BIN_DIR/commit-msg"
 
-# Write the commit-msg script
-cat > "$SCRIPT_PATH" << 'COMMIT_MSG_SCRIPT'
-#!/usr/bin/env bash
-# commit-msg -- AI-powered commit message generator via Claude Code
-# Usage: commit-msg [--dry-run] [--help]
+mkdir -p "$BIN_DIR"
 
-set -e
+# --- Write the script (single-quoted heredoc: no interpolation here) --------
+cat > "$TARGET" << 'COMMIT_MSG'
+#!/usr/bin/env sh
+# commit-msg — generate a Conventional Commit message from the staged diff
+# using the Claude CLI. Pure POSIX sh.
 
-DRY_RUN=false
+set -eu
 
+DRY_RUN=0
+
+usage() {
+    cat <<'EOF'
+Usage: commit-msg [OPTIONS]
+
+Generate an AI commit message from staged changes (Conventional Commits).
+
+Options:
+  -d, --dry-run   Print the suggested message without committing
+  -h, --help      Show this help
+
+Flow:
+  Stage your changes (git add ...), run commit-msg, then choose:
+  [Y]es / [e]dit / [r]egen / [n]o
+EOF
+}
+
+# --- Parse args ---------------------------------------------------------
 for arg in "$@"; do
-  case "$arg" in
-    --dry-run|-d) DRY_RUN=true ;;
-    --help|-h)
-      echo "Usage: commit-msg [--dry-run] [--help]"
-      echo ""
-      echo "  Analyzes your staged git diff with Claude Code and proposes"
-      echo "  a Conventional Commit message. Accept, edit, regenerate, or abort."
-      echo ""
-      echo "Options:"
-      echo "  --dry-run, -d   Print the suggestion only, do not commit"
-      echo "  --help,    -h   Show this help"
-      exit 0
-      ;;
-  esac
+    case "$arg" in
+        -d|--dry-run) DRY_RUN=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
+    esac
 done
 
-# Must be inside a git repo
-if ! git rev-parse --is-inside-work-tree &>/dev/null; then
-  echo "ERROR: Not inside a git repository."
-  exit 1
-fi
-
-# Must have staged changes
-if git diff --staged --quiet; then
-  echo "WARNING: No staged changes found. Run 'git add' first."
-  exit 1
-fi
-
-# Gather context
-REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
-BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-STAGED_FILES=$(git diff --staged --name-only)
-FILE_COUNT=$(echo "$STAGED_FILES" | wc -l | tr -d ' ')
-
-# Write diff to a temp file to avoid "Prompt is too long" on large changesets
-DIFF_FILE=$(mktemp /tmp/commit-diff-XXXXXX.txt)
-git diff --staged > "$DIFF_FILE"
-trap 'rm -f "$DIFF_FILE"' EXIT
-
-echo ""
-echo "Analyzing staged diff with Claude Code..."
-echo ""
-
-DIFF_CONTENT=$(head -800 "$DIFF_FILE")
-
-PROMPT="You are an expert developer writing git commit messages.
-
-Repository: ${REPO_NAME}
-Branch: ${BRANCH}
-Files changed (${FILE_COUNT}):
-$(echo "$STAGED_FILES" | head -30)
-
-Here is the full staged diff:
-
-${DIFF_CONTENT}
-
-Rules:
-1. Follow Conventional Commits spec: <type>(<scope>): <subject>
-   Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
-2. Subject line: max 72 chars, imperative mood, no trailing period
-3. If non-trivial, add a blank line then a short body (2-4 lines max)
-4. Be specific -- avoid vague messages like 'update files' or 'fix bug'
-5. Infer scope from the changed files/module when obvious
-
-Output ONLY the raw commit message -- no markdown fences, no commentary."
-
-# -p = non-interactive mode, uses your existing claude login session
-# --allowedTools Read = let Claude read the temp diff file
-RAW_MSG=$(claude -p "$PROMPT" --model claude-haiku-4-5 2>&1)
-SUGGESTED_MSG=$(echo "$RAW_MSG" | sed "/^```/d")
-EXIT_CODE=$?
-
-if [[ $EXIT_CODE -ne 0 ]]; then
-  echo "ERROR: Claude Code exited with code $EXIT_CODE:"
-  echo "$SUGGESTED_MSG"
-  exit 1
-fi
-
-if [[ -z "$SUGGESTED_MSG" ]]; then
-  echo "ERROR: Claude Code returned an empty response."
-  echo "  Make sure you are logged in: run 'claude' once interactively first."
-  exit 1
-fi
-
-# Display suggestion
-echo "------------------------------------------------------------------------"
-echo "Suggested commit message:"
-echo ""
-echo "$SUGGESTED_MSG"
-echo ""
-echo "------------------------------------------------------------------------"
-
-if $DRY_RUN; then
-  echo "(dry-run -- nothing committed)"
-  exit 0
-fi
-
-echo ""
-echo "What do you want to do?"
-echo "  [Y] Accept and commit"
-echo "  [e] Edit before committing"
-echo "  [r] Regenerate (ask Claude again)"
-echo "  [n] Abort"
-echo ""
-read -r -p "Choice [Y/e/r/n]: " CHOICE
-
-CHOICE_LOWER=$(echo "$CHOICE" | tr "[:upper:]" "[:lower:]")
-case "$CHOICE_LOWER" in
-  ""|y|yes)
-    git commit -m "$SUGGESTED_MSG"
-    echo ""
-    echo "Committed!"
-    ;;
-
-  e|edit)
-    TMP_FILE=$(mktemp /tmp/commit-msg-XXXXXX.txt)
-    echo "$SUGGESTED_MSG" > "$TMP_FILE"
-    {
-      echo ""
-      echo "# Edit your commit message above."
-      echo "# Lines starting with # are ignored."
-      echo "# Branch: $BRANCH | Repo: $REPO_NAME"
-    } >> "$TMP_FILE"
-
-    EDITOR="${GIT_EDITOR:-${VISUAL:-${EDITOR:-vi}}}"
-    "$EDITOR" "$TMP_FILE"
-
-    EDITED_MSG=$(grep -v '^#' "$TMP_FILE" \
-      | sed 's/[[:space:]]*$//' \
-      | sed '/./,$!d' \
-      | sed -e :a -e '/^\n*$/{$d;N;ba}')
-    rm -f "$TMP_FILE"
-
-    if [[ -z "$EDITED_MSG" ]]; then
-      echo "WARNING: Empty message -- aborting."
-      exit 1
-    fi
-
-    git commit -m "$EDITED_MSG"
-    echo ""
-    echo "Committed with your edited message!"
-    ;;
-
-  r|regen|regenerate)
-    echo ""
-    echo "Regenerating..."
-    exec commit-msg "$@"
-    ;;
-
-  n|no|abort)
-    echo "Aborted. Staged changes are still intact."
-    exit 0
-    ;;
-
-  *)
-    echo "Unknown choice -- aborting."
+# --- Guards -------------------------------------------------------------
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: not inside a git repository." >&2
     exit 1
-    ;;
-esac
-COMMIT_MSG_SCRIPT
-
-chmod +x "$SCRIPT_PATH"
-
-echo ""
-echo "Installed -> $SCRIPT_PATH"
-echo ""
-
-if echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
-  echo "$INSTALL_DIR is already in your PATH."
-else
-  echo "WARNING: $INSTALL_DIR is NOT yet in your PATH."
-  echo ""
-  echo "Add this to your ~/.zshrc (or ~/.bashrc) and restart your terminal:"
-  echo ""
-  echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-  echo ""
 fi
 
-echo "------------------------------------------------------------------------"
-echo "Usage:"
-echo "  git add <files>"
-echo "  commit-msg              # analyze -> suggest -> confirm"
-echo "  commit-msg --dry-run    # print suggestion only"
-echo "  commit-msg --help       # show help"
-echo "------------------------------------------------------------------------"
+if git diff --staged --quiet; then
+    echo "Error: no staged changes. Stage files with 'git add' first." >&2
+    exit 1
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+    echo "Error: 'claude' CLI not found in PATH." >&2
+    exit 1
+fi
+
+# --- Collect context ----------------------------------------------------
+REPO=$(basename "$(git rev-parse --show-toplevel)")
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+FILES=$(git diff --staged --name-only)
+COUNT=$(printf '%s\n' "$FILES" | wc -l | tr -d ' ')
+STAT=$(git diff --staged --stat)
+DIFF=$(git diff --staged | head -n 200)
+
+# --- Build prompt -------------------------------------------------------
+PROMPT="Write a git commit message for this diff.
+Repo: $REPO | Branch: $BRANCH | $COUNT files:
+$FILES
+---
+$STAT
+$DIFF
+---
+Use Conventional Commits: <type>(<scope>): <subject>
+Types: feat fix docs style refactor perf test chore ci build revert
+Max 72 chars, imperative mood. Short body only if needed.
+Reply with the commit message only. No markdown, no fences."
+
+# --- Call Claude --------------------------------------------------------
+echo "Generating commit message..." >&2
+MSG=$(printf '%s' "$PROMPT" | claude -p --model claude-haiku-4-5 2>&1) || {
+    echo "Error: claude CLI failed:" >&2
+    printf '%s\n' "$MSG" >&2
+    exit 1
+}
+
+# Strip backtick fences if the model added them anyway
+MSG=$(printf '%s\n' "$MSG" | grep -v '^```' || true)
+
+if [ -z "$MSG" ]; then
+    echo "Error: empty response from claude." >&2
+    exit 1
+fi
+
+# --- Show + confirm -----------------------------------------------------
+echo ""
+echo "Suggested commit message:"
+echo "-------------------------------------------"
+printf '%s\n' "$MSG"
+echo "-------------------------------------------"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo "(dry run — nothing committed)"
+    exit 0
+fi
+
+printf '[Y]es / [e]dit / [r]egen / [n]o ? '
+read -r ANSWER
+ANSWER=$(printf '%s' "$ANSWER" | tr '[:upper:]' '[:lower:]')
+
+case "$ANSWER" in
+    y|yes|"")
+        git commit -m "$MSG"
+        ;;
+    e|edit)
+        TMP=$(mktemp /tmp/commit-msg.XXXXXX)
+        printf '%s\n' "$MSG" > "$TMP"
+        printf '\n# Edit the commit message above. Lines starting with # are ignored.\n' >> "$TMP"
+        ED="${GIT_EDITOR:-${VISUAL:-${EDITOR:-vi}}}"
+        $ED "$TMP"
+        FINAL=$(grep -v '^#' "$TMP")
+        rm -f "$TMP"
+        if [ -z "$FINAL" ]; then
+            echo "Empty message, aborting." >&2
+            exit 1
+        fi
+        git commit -m "$FINAL"
+        ;;
+    r|regen)
+        exec commit-msg "$@"
+        ;;
+    n|no|*)
+        echo "Aborted. Staged changes left intact."
+        exit 0
+        ;;
+esac
+COMMIT_MSG
+
+chmod +x "$TARGET"
+echo "Installed: $TARGET"
+
+# --- PATH warning -------------------------------------------------------------
+case ":$PATH:" in
+    *":$BIN_DIR:"*)
+        echo "Ready. Stage changes and run: commit-msg"
+        ;;
+    *)
+        echo "Warning: $BIN_DIR is not in your PATH." >&2
+        echo "Add this to your shell profile (~/.profile, ~/.bashrc, ~/.zshrc):" >&2
+        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
+        ;;
+esac
